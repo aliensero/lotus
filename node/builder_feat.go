@@ -150,12 +150,13 @@ var LIBP2PONLY = Options(
 
 		return nil
 	}),
-	// Override(new(Ipv4), "/ip4/0.0.0.0/tcp/3333"),
-	// Override(new(Ipv6), "/ip6/::/tcp/0"),
-	Override(invoke(0), func(ipv4 Ipv4, ipv6 Ipv6) error {
+	Override(new(Ipv4), "/ip4/0.0.0.0/tcp/3333"),
+	Override(new(Ipv6), "/ip6/::/tcp/0"),
+	Override(invoke(0), func(ipv4 Ipv4, ipv6 Ipv6, h host.Host) error {
 		// lp2p.StartListening([]string{string(ipv4), string(ipv6)})
-		lp2p.StartListening([]string{"/ip4/0.0.0.0/tcp/3333", "/ip6/::/tcp/0"})
-		return nil
+		f := lp2p.StartListening([]string{string(ipv4), string(ipv6)})
+		err := f(h)
+		return err
 	}),
 )
 
