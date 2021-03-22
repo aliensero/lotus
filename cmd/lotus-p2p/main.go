@@ -43,7 +43,7 @@ var runCmd = &cli.Command{
 		},
 		&cli.StringFlag{
 			Name:  "ipv4",
-			Value: "/ip4/0.0.0.0/tcp/3334",
+			Value: "/ip4/0.0.0.0/tcp/3333",
 		},
 		&cli.StringFlag{
 			Name:  "ipv6",

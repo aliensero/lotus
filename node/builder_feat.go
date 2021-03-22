@@ -1,7 +1,6 @@
 package node
 
 import (
-	"bufio"
 	"context"
 	"crypto/rand"
 	"fmt"
@@ -9,7 +8,6 @@ import (
 
 	cborutil "github.com/filecoin-project/go-cbor-util"
 	"github.com/filecoin-project/lotus/build"
-	"github.com/filecoin-project/lotus/chain/exchange"
 	"github.com/filecoin-project/lotus/node/hello"
 
 	"github.com/libp2p/go-eventbus"
@@ -91,7 +89,6 @@ var LIBP2PONLY = Options(
 
 	Override(new(record.Validator), modules.RecordValidator),
 
-	Override(DiscoveryHandlerKey, lp2p.DiscoveryHandler),
 	Override(ConnectionManagerKey, func() (lp2p.Libp2pOpts, error) {
 		cm := connmgr.NewConnManager(50, 200, 20*time.Second)
 		infos, err := build.BuiltinBootstrap()
@@ -100,13 +97,17 @@ var LIBP2PONLY = Options(
 			return lp2p.Libp2pOpts{}, err
 		}
 		for _, info := range infos {
-			cm.Protect(info.ID, "bootstrap")
+			cm.Protect(info.ID, "config-prot")
 		}
 
 		return lp2p.Libp2pOpts{
 			Opts: []libp2p.Option{libp2p.ConnectionManager(cm)},
 		}, nil
 	}),
+
+	Override(NatPortMapKey, lp2p.NatPortMap),
+	Override(BandwidthReporterKey, lp2p.BandwidthCounter),
+	Override(AutoNATSvcKey, lp2p.AutoNATService),
 
 	Override(RunHelloKey, func(h host.Host) error {
 		h.SetStreamHandler(hello.ProtocolID, func(s network.Stream) {
@@ -117,16 +118,9 @@ var LIBP2PONLY = Options(
 				_ = s.Conn().Close()
 				return
 			}
-			fmt.Println("hello message", hmsg)
+			fmt.Println("ID", s.ID(), "hello message", hmsg)
 		})
-		h.SetStreamHandler(exchange.ChainExchangeProtocolID, func(s network.Stream) {
-			var req exchange.Request
-			if err := cborutil.ReadCborRPC(bufio.NewReader(s), &req); err != nil {
-				log.Warnf("failed to read block sync request: %s", err)
-				return
-			}
-			fmt.Printf("request %v\n", req)
-		})
+
 		sub, err := h.EventBus().Subscribe(new(event.EvtPeerIdentificationCompleted), eventbus.BufSize(1024))
 		if err != nil {
 			return xerrors.Errorf("failed to subscribe to event bus: %w", err)
@@ -150,10 +144,9 @@ var LIBP2PONLY = Options(
 
 		return nil
 	}),
-	Override(new(Ipv4), "/ip4/0.0.0.0/tcp/3333"),
-	Override(new(Ipv6), "/ip6/::/tcp/0"),
+	Override(new(Ipv4), Ipv4("/ip4/0.0.0.0/tcp/3333")),
+	Override(new(Ipv6), Ipv6("/ip6/::/tcp/0")),
 	Override(invoke(0), func(ipv4 Ipv4, ipv6 Ipv6, h host.Host) error {
-		// lp2p.StartListening([]string{string(ipv4), string(ipv6)})
 		f := lp2p.StartListening([]string{string(ipv4), string(ipv6)})
 		err := f(h)
 		return err
