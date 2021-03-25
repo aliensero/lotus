@@ -3,24 +3,20 @@ package node
 import (
 	"context"
 	"crypto/rand"
-	"fmt"
 	"time"
 
-	cborutil "github.com/filecoin-project/go-cbor-util"
 	"github.com/filecoin-project/lotus/build"
-	"github.com/filecoin-project/lotus/node/hello"
+	"github.com/filecoin-project/lotus/chain/types"
 
-	"github.com/libp2p/go-eventbus"
 	"github.com/libp2p/go-libp2p"
 	connmgr "github.com/libp2p/go-libp2p-connmgr"
 	"github.com/libp2p/go-libp2p-core/crypto"
-	"github.com/libp2p/go-libp2p-core/event"
 	"github.com/libp2p/go-libp2p-core/host"
-	"github.com/libp2p/go-libp2p-core/network"
 	"github.com/libp2p/go-libp2p-core/peer"
 	"github.com/libp2p/go-libp2p-core/peerstore"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p-peerstore/pstoremem"
+	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	record "github.com/libp2p/go-libp2p-record"
 	"go.uber.org/fx"
 	"golang.org/x/xerrors"
@@ -34,6 +30,7 @@ import (
 
 var LIBP2PONLY = Options(
 
+	Override(new(context.Context), context.Background()),
 	Override(new(dtypes.Bootstrapper), dtypes.Bootstrapper(false)),
 	Override(new(dtypes.NetworkName), func() (dtypes.NetworkName, error) {
 		return "calibrationnet", nil
@@ -61,8 +58,8 @@ var LIBP2PONLY = Options(
 
 	Override(new(lp2p.RawHost), lp2p.Host1),
 	Override(new(host.Host), lp2p.RoutedHost),
-	Override(new(lp2p.BaseIpfsRouting), func(lc fx.Lifecycle, host lp2p.RawHost, validator record.Validator, nn dtypes.NetworkName) (lp2p.BaseIpfsRouting, error) {
-		fmt.Printf("NetworkerName %v\n", nn)
+	Override(new(lp2p.BaseIpfsRouting), func(ctx context.Context, lc fx.Lifecycle, host lp2p.RawHost, validator record.Validator, nn dtypes.NetworkName) (lp2p.BaseIpfsRouting, error) {
+		log.Infof("NetworkerName %v\n", nn)
 		opts := []dht.Option{dht.Mode(dht.ModeAuto),
 			dht.Validator(validator),
 			dht.ProtocolPrefix(build.DhtProtocolName(nn)),
@@ -71,7 +68,7 @@ var LIBP2PONLY = Options(
 			dht.DisableProviders(),
 			dht.DisableValues()}
 		d, err := dht.New(
-			context.TODO(), host, opts...,
+			ctx, host, opts...,
 		)
 
 		if err != nil {
@@ -88,14 +85,16 @@ var LIBP2PONLY = Options(
 	}),
 
 	Override(new(record.Validator), modules.RecordValidator),
-
-	Override(ConnectionManagerKey, func() (lp2p.Libp2pOpts, error) {
-		cm := connmgr.NewConnManager(50, 200, 20*time.Second)
+	Override(new([]peer.AddrInfo), func() []peer.AddrInfo {
 		infos, err := build.BuiltinBootstrap()
 		if err != nil {
-			log.Errorf("ParseAddresses error %v", err)
-			return lp2p.Libp2pOpts{}, err
+			log.Error(err)
+			return nil
 		}
+		return infos
+	}),
+	Override(ConnectionManagerKey, func(infos []peer.AddrInfo) (lp2p.Libp2pOpts, error) {
+		cm := connmgr.NewConnManager(50, 200, 20*time.Second)
 		for _, info := range infos {
 			cm.Protect(info.ID, "config-prot")
 		}
@@ -109,47 +108,55 @@ var LIBP2PONLY = Options(
 	Override(BandwidthReporterKey, lp2p.BandwidthCounter),
 	Override(AutoNATSvcKey, lp2p.AutoNATService),
 
-	Override(RunHelloKey, func(h host.Host) error {
-		h.SetStreamHandler(hello.ProtocolID, func(s network.Stream) {
-			fmt.Println("streamHandler")
-			var hmsg hello.HelloMessage
-			if err := cborutil.ReadCborRPC(s, &hmsg); err != nil {
-				fmt.Println("failed to read hello message, disconnecting", "error", err)
-				_ = s.Conn().Close()
-				return
-			}
-			fmt.Println("ID", s.ID(), "hello message", hmsg)
-		})
-
-		sub, err := h.EventBus().Subscribe(new(event.EvtPeerIdentificationCompleted), eventbus.BufSize(1024))
-		if err != nil {
-			return xerrors.Errorf("failed to subscribe to event bus: %w", err)
-		}
-		infos, err := build.BuiltinBootstrap()
-		if err != nil {
-			log.Errorf("ParseAddresses error %v", err)
-			return err
-		}
-		for _, info := range infos {
-			i := info
-			go func() {
-				err := h.Connect(context.TODO(), i)
-				log.Error(err)
-			}()
-		}
-		for evt := range sub.Out() {
-			pic := evt.(event.EvtPeerIdentificationCompleted)
-			log.Infof("peer info %v", pic)
-		}
-
-		return nil
-	}),
 	Override(new(Ipv4), Ipv4("/ip4/0.0.0.0/tcp/3333")),
 	Override(new(Ipv6), Ipv6("/ip6/::/tcp/0")),
 	Override(invoke(0), func(ipv4 Ipv4, ipv6 Ipv6, h host.Host) error {
 		f := lp2p.StartListening([]string{string(ipv4), string(ipv6)})
 		err := f(h)
 		return err
+	}),
+	Override(invoke(1), func(ctx context.Context, h host.Host, infos []peer.AddrInfo) error {
+		for _, info := range infos {
+			err := h.Connect(ctx, info)
+			log.Error(err)
+		}
+		return nil
+	}),
+	Override(invoke(2), func(ctx context.Context, h host.Host, nn dtypes.NetworkName) error {
+
+		// topic := build.MessagesTopic(nn)
+		topic := build.BlocksTopic(nn)
+		log.Infof("Subscribe topic %s", topic)
+		pub, err := pubsub.NewGossipSub(ctx, h)
+		if err != nil {
+			return err
+		}
+		pub.RegisterTopicValidator(topic, func(ctx context.Context, pid peer.ID, msg *pubsub.Message) pubsub.ValidationResult {
+			blk, err := types.DecodeBlockMsg(msg.GetData())
+			if err != nil {
+				log.Error(err)
+				return pubsub.ValidationReject
+			}
+			log.Warn("block message validate")
+			msg.ValidatorData = blk
+			return pubsub.ValidationAccept
+		})
+		sub, err := pub.Subscribe(topic)
+		if err != nil {
+			return err
+		}
+
+		for {
+			msg, err := sub.Next(ctx)
+			if err != nil {
+				log.Errorf("sub.Next error %v", err)
+				continue
+			}
+			if msg.ValidatorData != nil {
+				blk := msg.ValidatorData.(*types.BlockMsg)
+				log.Infof("block cid %v height %v", blk.Header.Cid(), blk.Header.Height)
+			}
+		}
 	}),
 )
 

@@ -54,7 +54,7 @@ var runCmd = &cli.Command{
 		ctx := cctx.Context
 		stopFunc, err := node.NewNoDefault(ctx,
 			node.LIBP2PONLY,
-			node.ApplyIf(func(s *node.Settings) bool { return cctx.String("netname") != "" }, node.Override(new(dtypes.NetworkName), cctx.String("netname"))),
+			node.ApplyIf(func(s *node.Settings) bool { return cctx.String("netname") != "" }, node.Override(new(dtypes.NetworkName), dtypes.NetworkName(cctx.String("netname")))),
 			node.ApplyIf(func(s *node.Settings) bool { return cctx.String("ipv4") != "" }, node.Override(new(node.Ipv4), node.Ipv4(cctx.String("ipv4")))),
 			node.ApplyIf(func(s *node.Settings) bool { return cctx.String("ipv6") != "" }, node.Override(new(node.Ipv6), node.Ipv6(cctx.String("ipv6")))),
 		)
