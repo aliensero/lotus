@@ -126,6 +126,8 @@ require (
 	github.com/opentracing/opentracing-go v1.2.0
 	github.com/polydawn/refmt v0.0.0-20190809202753-05966cbd336a
 	github.com/prometheus/client_golang v1.6.0
+	github.com/prometheus/common v0.10.0
+	github.com/qiniupd/qiniu-go-sdk v1.0.2
 	github.com/raulk/clock v1.1.0
 	github.com/raulk/go-watchdog v1.0.1
 	github.com/stretchr/testify v1.7.0
